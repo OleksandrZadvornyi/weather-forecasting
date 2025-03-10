@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import glob
 import os
+import time
 
 # When reading the CSV files, specify dtypes
 dtypes = {
@@ -245,8 +246,11 @@ for station_id in train_data.keys():
     val_norm[station_id][numeric_cols] = val_numeric
     test_norm[station_id][numeric_cols] = test_numeric
 
+
 # 9. Create sequences for time series forecasting
 print("Creating sequences for forecasting...")
+start_time = time.time()
+
 # Choose target variable
 target_col = 'TMAX'  # Can be changed to TMIN, PRCP, etc.
 seq_length = 14  # Use 14 days of history
@@ -257,27 +261,58 @@ train_combined = pd.concat([df for df in train_norm.values()])
 val_combined = pd.concat([df for df in val_norm.values()])
 test_combined = pd.concat([df for df in test_norm.values()])
 
-# Create sequences
+print("Processing training data...")
 X_train, y_train = prepare_time_series_data(train_combined, target_col, seq_length, forecast_horizon)
+print(f"Training data processed in {time.time() - start_time:.2f} seconds")
+
+print("Processing validation data...")
 X_val, y_val = prepare_time_series_data(val_combined, target_col, seq_length, forecast_horizon)
+print(f"Validation data processed in {time.time() - start_time:.2f} seconds")
+
+print("Processing test data...")
 X_test, y_test = prepare_time_series_data(test_combined, target_col, seq_length, forecast_horizon)
+print(f"Test data processed in {time.time() - start_time:.2f} seconds")
 
 print(f"Created {len(X_train)} training sequences, {len(X_val)} validation sequences, {len(X_test)} test sequences")
 
 # 10. Save the prepared data
 print("Saving prepared data...")
-os.makedirs('prepared_data', exist_ok=True)
+data_dir = "D:/Dev/python-projects/weather-forecasting/prepared_data"
+os.makedirs(data_dir, exist_ok=True)
+
+def save_in_batches(data, filename, batch_size=1000):
+    """Save large arrays in batches to avoid memory errors."""
+    n_batches = len(data) // batch_size + (1 if len(data) % batch_size != 0 else 0)
+    
+    for i in range(n_batches):
+        start_idx = i * batch_size
+        end_idx = min((i + 1) * batch_size, len(data))
+        
+        batch = data[start_idx:end_idx]
+        
+        # For the first batch, create a new file
+        if i == 0:
+            np.save(filename, batch)
+        else:
+            # For subsequent batches, append to the existing file
+            with open(filename, 'ab') as f:
+                np.save(f, batch)
+        
+        # Free memory
+        del batch
+        
+    print(f"Saved {len(data)} items to {filename} in {n_batches} batches")
 
 # Save sequences
-np.save('prepared_data/X_train.npy', X_train)
-np.save('prepared_data/y_train.npy', y_train)
-np.save('prepared_data/X_val.npy', X_val)
-np.save('prepared_data/y_val.npy', y_val)
-np.save('prepared_data/X_test.npy', X_test)
-np.save('prepared_data/y_test.npy', y_test)
+save_in_batches(X_train, f'{data_dir}/X_train.npy')
+np.save(f'{data_dir}/y_train.npy', y_train)
+save_in_batches(X_val, f'{data_dir}/X_val.npy')
+np.save(f'{data_dir}/y_val.npy', y_val)
+save_in_batches(X_test, f'{data_dir}/X_test.npy')
+np.save(f'{data_dir}/y_test.npy', y_test)
 
 # Save normalization parameters
-pd.to_pickle(normalization_params, 'prepared_data/normalization_params.pkl')
+pd.to_pickle(normalization_params, f'{data_dir}/normalization_params.pkl')
 
 print("Data preparation complete!")
 print("Final dataset shapes:")
