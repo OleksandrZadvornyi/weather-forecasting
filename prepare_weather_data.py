@@ -30,6 +30,11 @@ dtypes = {
 ukrainian_files = glob.glob('D:/daily-summaries-latest-upm/*.csv')
 print(f"Found {len(ukrainian_files)} data files")
 
+# Limit to 100 files max
+max_files = 50
+ukrainian_files = ukrainian_files[:max_files]
+print(f"Reading {len(ukrainian_files)} files")
+
 # 2. Read and combine files
 ddf = dd.read_csv(ukrainian_files, dtype=dtypes, assume_missing=True)
 print(f"Data loaded with {len(ddf.columns)} columns")
@@ -77,7 +82,7 @@ print("Preprocessing data...")
 ddf = ddf.map_partitions(preprocess, meta=meta_df)
 
 # 5. Convert Dask dataframe to Pandas for further processing
-# Note: This will load all data into memory, so ensure you have enough RAM
+# This will load all data into memory (ensure you have enough RAM)
 print("Converting to pandas dataframe...")
 df = ddf.compute()
 
@@ -174,6 +179,7 @@ def prepare_time_series_data(df, target_col='TMAX', seq_length=14, forecast_hori
         
         # Drop any rows with NaN
         numeric_df = numeric_df.dropna()
+        numeric_df = numeric_df.astype(np.float32)
         
         if len(numeric_df) <= seq_length + forecast_horizon:
             continue
@@ -186,8 +192,8 @@ def prepare_time_series_data(df, target_col='TMAX', seq_length=14, forecast_hori
             # Target sequence
             y_seq = numeric_df[target_col].iloc[i+seq_length:i+seq_length+forecast_horizon]
             
-            station_X.append(X_seq.values)
-            station_y.append(y_seq.values)
+            station_X.append(np.array(X_seq.values, dtype=np.float32))
+            station_y.append(np.array(y_seq.values, dtype=np.float32))
     
     return np.array(station_X), np.array(station_y)
 
@@ -277,7 +283,7 @@ print(f"Created {len(X_train)} training sequences, {len(X_val)} validation seque
 
 # 10. Save the prepared data
 print("Saving prepared data...")
-data_dir = "D:/Dev/python-projects/weather-forecasting/prepared_data"
+data_dir = "D:/Dev/python-projects/weather-forecasting/prepared_data_small"
 os.makedirs(data_dir, exist_ok=True)
 
 def save_in_batches(data, filename, batch_size=1000):
@@ -304,11 +310,16 @@ def save_in_batches(data, filename, batch_size=1000):
     print(f"Saved {len(data)} items to {filename} in {n_batches} batches")
 
 # Save sequences
-save_in_batches(X_train, f'{data_dir}/X_train.npy')
+#save_in_batches(X_train, f'{data_dir}/X_train.npy')
+#save_in_batches(X_val, f'{data_dir}/X_val.npy')
+#save_in_batches(X_test, f'{data_dir}/X_test.npy')
+
+np.save(f'{data_dir}/X_train.npy', X_train)
+np.save(f'{data_dir}/X_val.npy', X_val)
+np.save(f'{data_dir}/X_test.npy', X_test)
+
 np.save(f'{data_dir}/y_train.npy', y_train)
-save_in_batches(X_val, f'{data_dir}/X_val.npy')
 np.save(f'{data_dir}/y_val.npy', y_val)
-save_in_batches(X_test, f'{data_dir}/X_test.npy')
 np.save(f'{data_dir}/y_test.npy', y_test)
 
 # Save normalization parameters
@@ -322,3 +333,26 @@ print(f"X_val: {X_val.shape}")
 print(f"y_val: {y_val.shape}")
 print(f"X_test: {X_test.shape}")
 print(f"y_test: {y_test.shape}")
+
+
+
+
+
+
+
+
+
+
+
+print(f"X_train dtype: {X_train.dtype}")
+print(f"X_train sample type: {type(X_train[0])}")
+print(f"X_train shape: {X_train.shape}")
+
+print(f"X_train sample:\n{X_train[0]}")
+print(f"X_train first element type: {type(X_train[0, 0, 0])}")
+
+print(f"X_train element shapes: {[x.shape for x in X_train[:5]]}") 
+
+print(X_train.dtype, X_val.dtype, X_test.dtype)
+print(y_train.dtype, y_val.dtype, y_test.dtype)
+
