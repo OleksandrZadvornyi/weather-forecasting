@@ -31,7 +31,7 @@ ukrainian_files = glob.glob('D:/daily-summaries-latest-upm/*.csv')
 print(f"Found {len(ukrainian_files)} data files")
 
 # Limit to 100 files max
-max_files = 50
+max_files = 20
 ukrainian_files = ukrainian_files[:max_files]
 print(f"Reading {len(ukrainian_files)} files")
 
@@ -286,28 +286,28 @@ print("Saving prepared data...")
 data_dir = "D:/Dev/python-projects/weather-forecasting/prepared_data_small"
 os.makedirs(data_dir, exist_ok=True)
 
-def save_in_batches(data, filename, batch_size=1000):
-    """Save large arrays in batches to avoid memory errors."""
-    n_batches = len(data) // batch_size + (1 if len(data) % batch_size != 0 else 0)
+# def save_in_batches(data, filename, batch_size=1000):
+#     """Save large arrays in batches to avoid memory errors."""
+#     n_batches = len(data) // batch_size + (1 if len(data) % batch_size != 0 else 0)
     
-    for i in range(n_batches):
-        start_idx = i * batch_size
-        end_idx = min((i + 1) * batch_size, len(data))
+#     for i in range(n_batches):
+#         start_idx = i * batch_size
+#         end_idx = min((i + 1) * batch_size, len(data))
         
-        batch = data[start_idx:end_idx]
+#         batch = data[start_idx:end_idx]
         
-        # For the first batch, create a new file
-        if i == 0:
-            np.save(filename, batch)
-        else:
-            # For subsequent batches, append to the existing file
-            with open(filename, 'ab') as f:
-                np.save(f, batch)
+#         # For the first batch, create a new file
+#         if i == 0:
+#             np.save(filename, batch)
+#         else:
+#             # For subsequent batches, append to the existing file
+#             with open(filename, 'ab') as f:
+#                 np.save(f, batch)
         
-        # Free memory
-        del batch
+#         # Free memory
+#         del batch
         
-    print(f"Saved {len(data)} items to {filename} in {n_batches} batches")
+#     print(f"Saved {len(data)} items to {filename} in {n_batches} batches")
 
 # Save sequences
 #save_in_batches(X_train, f'{data_dir}/X_train.npy')
@@ -333,26 +333,3 @@ print(f"X_val: {X_val.shape}")
 print(f"y_val: {y_val.shape}")
 print(f"X_test: {X_test.shape}")
 print(f"y_test: {y_test.shape}")
-
-
-
-
-
-
-
-
-
-
-
-print(f"X_train dtype: {X_train.dtype}")
-print(f"X_train sample type: {type(X_train[0])}")
-print(f"X_train shape: {X_train.shape}")
-
-print(f"X_train sample:\n{X_train[0]}")
-print(f"X_train first element type: {type(X_train[0, 0, 0])}")
-
-print(f"X_train element shapes: {[x.shape for x in X_train[:5]]}") 
-
-print(X_train.dtype, X_val.dtype, X_test.dtype)
-print(y_train.dtype, y_val.dtype, y_test.dtype)
-
