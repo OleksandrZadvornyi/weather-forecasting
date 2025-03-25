@@ -1,4 +1,4 @@
-from datasets import load_from_disk
+from datasets import load_dataset
 from functools import lru_cache
 from functools import partial
 
@@ -37,11 +37,34 @@ from transformers import (
 
 import matplotlib.pyplot as plt
 import pandas as pd
+import numpy as np
 import torch
 import os
 
 from accelerate import Accelerator
 from torch.optim import AdamW
+
+dataset = load_dataset("monash_tsf", "tourism_monthly")
+
+train_example = dataset['train'][0]
+validation_example = dataset['validation'][0]
+test_example = dataset['test'][0]
+
+freq = "1M"
+prediction_length = 24
+
+assert len(train_example["target"]) + prediction_length == len(
+    validation_example["target"]
+)
+
+# Optional: Visualize training data
+# figure, axes = plt.subplots()
+# axes.plot(train_example["target"], color="blue")
+# axes.plot(validation_example["target"], color="red", alpha=0.5)
+# plt.show()
+
+train_dataset = dataset["train"]
+test_dataset = dataset["test"]
 
 @lru_cache(10_000)
 def convert_to_pandas_period(date, freq):
@@ -50,6 +73,27 @@ def convert_to_pandas_period(date, freq):
 def transform_start_field(batch, freq):
     batch["start"] = [convert_to_pandas_period(date, freq) for date in batch["start"]]
     return batch
+
+train_dataset.set_transform(partial(transform_start_field, freq=freq))
+test_dataset.set_transform(partial(transform_start_field, freq=freq))
+
+lags_sequence = get_lags_for_frequency(freq)
+time_features = time_features_from_frequency_str(freq)
+
+config = TimeSeriesTransformerConfig(
+    prediction_length=prediction_length,
+    context_length=prediction_length * 2,
+    lags_sequence=lags_sequence,
+    num_time_features=len(time_features) + 1,
+    num_static_categorical_features=1,
+    cardinality=[len(train_dataset)],
+    embedding_dimension=[2],
+    encoder_layers=4,
+    decoder_layers=4,
+    d_model=32,
+)
+
+model = TimeSeriesTransformerForPrediction(config)
 
 def create_transformation(freq: str, config: PretrainedConfig) -> Transformation:
     remove_field_names = []
@@ -201,88 +245,41 @@ def create_train_dataloader(
         num_batches_per_epoch=num_batches_per_epoch,
     )
 
-# Load datasets
-data_dir = "D:/Dev/python-projects/weather-forecasting/prepared_datasets"
-
-dataset = load_from_disk(f"{data_dir}/dataset")
-
-train_dataset = dataset["train"]
-validation_dataset = dataset["validation"]
-test_dataset = dataset["test"]
-
-print(f"Train dataset: {len(train_dataset)} time series")
-print(f"Validation dataset: {len(validation_dataset)} time series")
-print(f"Test dataset: {len(test_dataset)} time series")
-
-# Load metadata
-with open(f"{data_dir}/metadata.txt", "r") as f:
-    metadata = {}
-    for line in f:
-        key, value = line.strip().split("=")
-        metadata[key] = value
-
-target_column = metadata.get("target_column", "TMAX")
-freq = metadata.get("freq", "D")  # Daily frequency
-
-# Example of a time series from training set
-train_example = train_dataset[0]
-validation_example = validation_dataset[0]
-test_example = test_dataset[0]
-
-# Define prediction parameters
-prediction_length = 3459  # Predict 7 days ahead
-context_length = prediction_length * 2  # Use 14 days of context
-
-assert len(train_example["target"]) + prediction_length == len(
-    validation_example["target"]
-)
-
-figure, axes = plt.subplots()
-axes.plot(test_example["target"], color="green")
-axes.plot(validation_example["target"], color="red")
-axes.plot(train_example["target"], color="blue")
-plt.show()
-
-# Set transforms
-train_dataset.set_transform(partial(transform_start_field, freq=freq))
-validation_dataset.set_transform(partial(transform_start_field, freq=freq))
-test_dataset.set_transform(partial(transform_start_field, freq=freq))
-
-# Configure model
-lags_sequence = get_lags_for_frequency(freq)
-time_features = time_features_from_frequency_str(freq)
-
-config = TimeSeriesTransformerConfig(
-    prediction_length=prediction_length,
-    context_length=context_length,
-    lags_sequence=lags_sequence,
-    num_time_features=len(time_features) + 1,  # Add 1 for age feature
-    num_static_categorical_features=1,
-    num_static_real_features=3,  # Latitude, longitude, elevation
-    cardinality=[len(train_dataset) + 3212],  # Number of unique time series
-    embedding_dimension=[2],  # Dimension of categorical embedding
-    encoder_layers=4,
-    decoder_layers=4,
-    d_model=64,
-)
-
-model = TimeSeriesTransformerForPrediction(config)
-
-# Create data loaders
 train_dataloader = create_train_dataloader(
     config=config,
     freq=freq,
     data=train_dataset,
-    batch_size=128,
-    num_batches_per_epoch=50,
+    batch_size=256,
+    num_batches_per_epoch=100,
 )
+
+# Optional: Test a forward pass before training
+# batch = next(iter(train_dataloader))
+# for k, v in batch.items():
+#     print(k, v.shape, v.type())
+# outputs = model(
+#     past_values=batch["past_values"],
+#     past_time_features=batch["past_time_features"],
+#     past_observed_mask=batch["past_observed_mask"],
+#     static_categorical_features=batch["static_categorical_features"]
+#     if config.num_static_categorical_features > 0
+#     else None,
+#     static_real_features=batch["static_real_features"]
+#     if config.num_static_real_features > 0
+#     else None,
+#     future_values=batch["future_values"],
+#     future_time_features=batch["future_time_features"],
+#     future_observed_mask=batch["future_observed_mask"],
+#     output_hidden_states=True,
+# )
+# print("Loss:", outputs.loss.item())
 
 # Set up training
 accelerator = Accelerator()
 device = accelerator.device
 
 model.to(device)
-optimizer = AdamW(model.parameters(), lr=1e-4, betas=(0.9, 0.95), weight_decay=1e-2)
+optimizer = AdamW(model.parameters(), lr=6e-4, betas=(0.9, 0.95), weight_decay=1e-1)
 
 model, optimizer, train_dataloader = accelerator.prepare(
     model,
@@ -292,10 +289,7 @@ model, optimizer, train_dataloader = accelerator.prepare(
 
 # Training loop
 model.train()
-num_epochs = 30
-print(f"Starting training for {num_epochs} epochs...")
-
-for epoch in range(num_epochs):
+for epoch in range(40):
     epoch_loss = 0
     num_batches = 0
     
@@ -324,18 +318,20 @@ for epoch in range(num_epochs):
         epoch_loss += loss.item()
         num_batches += 1
 
-        if idx % 10 == 0:
+        if idx % 100 == 0:
             print(f"Epoch {epoch}, Batch {idx}, Loss: {loss.item():.4f}")
     
     avg_epoch_loss = epoch_loss / num_batches
     print(f"Epoch {epoch} completed. Average loss: {avg_epoch_loss:.4f}")
 
 # Save the model and configuration
-os.makedirs("./weather_model", exist_ok=True)
-os.makedirs("./weather_model/config", exist_ok=True)
 
-model_path = "./weather_model/time_series_model.pth"
-config_path = "./weather_model/config"
+# Create directory for model artifacts
+os.makedirs("./saved_model", exist_ok=True)
+os.makedirs("./saved_model/config", exist_ok=True)
+
+model_path = "./saved_model/time_series_model.pth"
+config_path = "./saved_model/config"
 
 # Get the unwrapped model if using accelerator
 unwrapped_model = accelerator.unwrap_model(model)
@@ -344,13 +340,12 @@ unwrapped_model = accelerator.unwrap_model(model)
 torch.save(unwrapped_model.state_dict(), model_path)
 
 # Save the configuration
-unwrapped_model.config.to_json_file(os.path.join("./weather_model/config/config.json"))
+unwrapped_model.config.to_json_file(os.path.join("./saved_model/config/config.json"))
 
 # Save frequency and prediction length for later use
-with open(os.path.join("./weather_model/config/metadata.txt"), "w") as f:
+with open(os.path.join("./saved_model/config/metadata.txt"), "w") as f:
     f.write(f"freq={freq}\n")
     f.write(f"prediction_length={prediction_length}\n")
-    f.write(f"target_column={target_column}\n")
     f.write(f"lags_sequence={lags_sequence}\n")
 
 print(f"Model saved to {model_path}")

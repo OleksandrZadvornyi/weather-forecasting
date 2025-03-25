@@ -38,5 +38,5 @@ features  = Features(
     }
 )
 
-dataset = Dataset.from_list(list_ds, features=features)
-dataset
+dataset_from_csv = Dataset.from_list(list_ds, features=features)
+dataset_from_csv
