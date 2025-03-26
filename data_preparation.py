@@ -207,6 +207,10 @@ def prepare_gluonts_data(data_dict, target_column='TMAX'):
     """
     gluonts_data = []
     
+    # Create a mapping of station IDs to unique categorical indices
+    station_ids = list(data_dict.keys())
+    station_id_to_cat = {station_id: idx for idx, station_id in enumerate(station_ids)}
+    
     for station_id, df in data_dict.items():
         # Sort by date
         df = df.sort_index()
@@ -217,8 +221,9 @@ def prepare_gluonts_data(data_dict, target_column='TMAX'):
         # Get start timestamp
         start = df.index[0]
         
-        # Create static features
-        static_cat = [int(station_id.replace("-", "")[-4:]) % 10000]  # Use last 4 digits of station ID
+        # Create static categorical feature
+        # Use the pre-mapped index to ensure it's within the expected range
+        static_cat = [station_id_to_cat[station_id]]
         
         # Create optional static real features
         static_real = [
