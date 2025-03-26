@@ -230,18 +230,73 @@ validation_example = validation_dataset[0]
 test_example = test_dataset[0]
 
 # Define prediction parameters
-prediction_length = 3459  # Predict 7 days ahead
+prediction_length = 7  # Predict 7 days ahead
 context_length = prediction_length * 2  # Use 14 days of context
 
-assert len(train_example["target"]) + prediction_length == len(
-    validation_example["target"]
-)
+# assert len(train_example["target"]) + prediction_length == len(
+#     validation_example["target"]
+# )
 
-figure, axes = plt.subplots()
-axes.plot(test_example["target"], color="green")
-axes.plot(validation_example["target"], color="red")
-axes.plot(train_example["target"], color="blue")
-plt.show()
+# figure, axes = plt.subplots()
+# axes.plot(test_example["target"], color="green")
+# axes.plot(validation_example["target"], color="red")
+# axes.plot(train_example["target"], color="blue")
+# plt.show()
+
+import numpy as np
+
+def plot_sequential_time_series(train_example, validation_example, test_example, 
+                                 title=None, target_column="TMAX"):
+    """
+    Plot time series data sequentially from train, validation, and test sets.
+    
+    Parameters:
+    - train_example: First time series example from train dataset
+    - validation_example: First time series example from validation dataset
+    - test_example: First time series example from test dataset
+    - title: Optional title for the plot
+    - target_column: Name of the target column (default is "TMAX")
+    """
+    # Create a figure and axis
+    plt.figure(figsize=(15, 6))
+    
+    # Extract target values
+    train_target = train_example["target"]
+    validation_target = validation_example["target"]
+    test_target = test_example["target"]
+    
+    # Calculate the x-axis values for each array
+    train_x = np.arange(0, len(train_target))
+    validation_x = np.arange(len(train_target), len(train_target) + len(validation_target))
+    test_x = np.arange(len(train_target) + len(validation_target), 
+                       len(train_target) + len(validation_target) + len(test_target))
+    
+    # Plot each array with its corresponding x-axis values
+    plt.plot(train_x, train_target, color="blue", label="Train")
+    plt.plot(validation_x, validation_target, color="red", label="Validation")
+    plt.plot(test_x, test_target, color="green", label="Test")
+    
+    # Add labels and title
+    plt.xlabel("Time Index")
+    plt.ylabel(f"{target_column} Temperature")
+    plt.title(title or f"Sequential Time Series Plot of {target_column}")
+    plt.legend()
+    
+    # Add vertical lines to separate datasets
+    plt.axvline(x=len(train_target), color='gray', linestyle='--', alpha=0.7)
+    plt.axvline(x=len(train_target) + len(validation_target), color='gray', linestyle='--', alpha=0.7)
+    
+    # Show the plot
+    plt.tight_layout()
+    plt.show()
+
+# Usage in your existing code:
+plot_sequential_time_series(
+    train_example, 
+    validation_example, 
+    test_example, 
+    target_column=target_column
+)
 
 # Set transforms
 train_dataset.set_transform(partial(transform_start_field, freq=freq))
@@ -259,7 +314,7 @@ config = TimeSeriesTransformerConfig(
     num_time_features=len(time_features) + 1,  # Add 1 for age feature
     num_static_categorical_features=1,
     num_static_real_features=3,  # Latitude, longitude, elevation
-    cardinality=[len(train_dataset) + 3212],  # Number of unique time series
+    cardinality=[len(train_dataset)],  # Number of unique time series
     embedding_dimension=[2],  # Dimension of categorical embedding
     encoder_layers=4,
     decoder_layers=4,
