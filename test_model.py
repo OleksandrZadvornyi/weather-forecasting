@@ -1,162 +1,282 @@
+import os
+from datasets import load_from_disk
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 import pandas as pd
-from datasets import load_from_disk
+from evaluate import load
+from gluonts.time_feature import get_seasonality, time_features_from_frequency_str
 from transformers import TimeSeriesTransformerForPrediction, TimeSeriesTransformerConfig
-from functools import partial
+from gluonts.dataset.common import ListDataset
+from gluonts.transform import (
+    AddAgeFeature,
+    AddObservedValuesIndicator,
+    AddTimeFeatures,
+    AsNumpyArray,
+    Chain,
+    InstanceSplitter,
+    RemoveFields,
+    TestSplitSampler,
+    VstackFeatures,
+    RenameFields,
+)
+from gluonts.dataset.field_names import FieldName
+
+# Load model and configuration
+model_dir = "./weather_model"
+model_path = os.path.join(model_dir, "time_series_model.pth")
+config_path = os.path.join(model_dir, "config")
+
+# Load configuration
+config = TimeSeriesTransformerConfig.from_pretrained(config_path)
 
 # Load metadata
-data_dir = "D:/Dev/python-projects/weather-forecasting/prepared_datasets"
-with open(f"{data_dir}/metadata.txt", "r") as f:
-    metadata = {}
+metadata = {}
+with open(os.path.join(model_dir, "config/metadata.txt"), "r") as f:
     for line in f:
         key, value = line.strip().split("=")
         metadata[key] = value
 
-# Load datasets
-test_dataset = load_from_disk(f"{data_dir}/test")
-
-# Metadata parameters
+freq = metadata["freq"]
+prediction_length = int(metadata["prediction_length"])
 target_column = metadata.get("target_column", "TMAX")
-freq = metadata.get("freq", "D")
-prediction_length = int(metadata.get("prediction_length", 7))
-context_length = prediction_length * 2
 
-# Helper function to convert start field
-def convert_to_pandas_period(date, freq):
-    return pd.Period(date, freq)
-
-def transform_start_field(batch, freq):
-    batch["start"] = [convert_to_pandas_period(date, freq) for date in batch["start"]]
-    return batch
-
-# Set transform for test dataset
-test_dataset.set_transform(partial(transform_start_field, freq=freq))
-
-# Reload saved model configuration and model
-config = TimeSeriesTransformerConfig.from_json_file("./weather_model/config/config.json")
+# Initialize model
 model = TimeSeriesTransformerForPrediction(config)
-model.load_state_dict(torch.load("./weather_model/time_series_model.pth"))
+model.load_state_dict(torch.load(model_path))
 model.eval()
 
-# Function to generate forecast for a single time series
-def generate_forecast(model, time_series, device='cpu'):
-    # Prepare input features
-    inputs = {
-        "past_values": torch.tensor(time_series["target"][:-prediction_length]).unsqueeze(0).float(),
-        "past_time_features": torch.tensor(time_series["time_features"][:, :-prediction_length]).unsqueeze(0).float(),
-        "past_observed_mask": torch.ones_like(torch.tensor(time_series["target"][:-prediction_length])).unsqueeze(0).bool(),
-        "future_time_features": torch.tensor(time_series["time_features"][:, -prediction_length:]).unsqueeze(0).float(),
-    }
-    
-    # Add static features if they exist
-    if "static_categorical_features" in time_series:
-        inputs["static_categorical_features"] = torch.tensor(time_series["static_categorical_features"]).unsqueeze(0)
-    if "static_real_features" in time_series:
-        inputs["static_real_features"] = torch.tensor(time_series["static_real_features"]).unsqueeze(0).float()
-    
-    # Move inputs to device
-    inputs = {k: v.to(device) for k, v in inputs.items()}
-    
-    # Generate forecast
-    with torch.no_grad():
-        outputs = model.generate(**inputs)
-    
-    return outputs.sequences.cpu().numpy()
+# Load test dataset
+data_dir = "D:/Dev/python-projects/weather-forecasting/prepared_datasets"
+dataset = load_from_disk(f"{data_dir}/dataset")
+test_dataset = dataset["test"]
 
-# Function to plot forecast
-def plot_forecast(time_series, forecasts, target_column, freq='D', prediction_length=7):
-    # Create timestamp index
-    index = pd.period_range(
-        start=time_series['start'],
-        periods=len(time_series['target']),
-        freq=freq,
-    ).to_timestamp()
+# Convert test dataset to GluonTS ListDataset format
+def convert_to_gluonts_dataset(hf_dataset, freq):
+    data = []
+    for item in hf_dataset:
+        data.append({
+            FieldName.START: pd.Period(item["start"], freq=freq),
+            FieldName.TARGET: item["target"],
+            FieldName.FEAT_STATIC_CAT: [item["feat_static_cat"][0]],
+            FieldName.FEAT_STATIC_REAL: item["feat_static_real"],
+            FieldName.ITEM_ID: item["item_id"]
+        })
+    return ListDataset(data, freq=freq)
 
-    plt.figure(figsize=(12, 6))
-    
-    # Plot historical data
-    plt.plot(index[:-prediction_length], time_series['target'][:-prediction_length], 
-             label='Historical', color='blue')
-    
-    # Plot ground truth for forecast period
-    plt.plot(index[-prediction_length:], time_series['target'][-prediction_length:], 
-             label='Ground Truth', color='green', linestyle='--')
-    
-    # Plot forecast
-    forecast_median = np.median(forecasts, axis=0)
-    plt.plot(index[-prediction_length:], forecast_median, 
-             label='Forecast Median', color='red')
-    
-    # Plot forecast uncertainty
-    plt.fill_between(
-        index[-prediction_length:],
-        np.percentile(forecasts, 25, axis=0),
-        np.percentile(forecasts, 75, axis=0),
-        alpha=0.3, color='red', label='50% Confidence Interval'
+gluonts_test_dataset = convert_to_gluonts_dataset(test_dataset, freq)
+
+# Set device
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+
+# Create test transformation
+def create_test_transformation(freq: str, config: TimeSeriesTransformerConfig):
+    remove_field_names = []
+    if config.num_static_real_features == 0:
+        remove_field_names.append(FieldName.FEAT_STATIC_REAL)
+    if config.num_dynamic_real_features == 0:
+        remove_field_names.append(FieldName.FEAT_DYNAMIC_REAL)
+    if config.num_static_categorical_features == 0:
+        remove_field_names.append(FieldName.FEAT_STATIC_CAT)
+
+    return Chain(
+        [RemoveFields(field_names=remove_field_names)]
+        + [
+            AsNumpyArray(
+                field=FieldName.TARGET,
+                expected_ndim=1,
+            ),
+            AddObservedValuesIndicator(
+                target_field=FieldName.TARGET,
+                output_field=FieldName.OBSERVED_VALUES,
+            ),
+            AddTimeFeatures(
+                start_field=FieldName.START,
+                target_field=FieldName.TARGET,
+                output_field=FieldName.FEAT_TIME,
+                time_features=time_features_from_frequency_str(freq),
+                pred_length=config.prediction_length,
+            ),
+            AddAgeFeature(
+                target_field=FieldName.TARGET,
+                output_field=FieldName.FEAT_AGE,
+                pred_length=config.prediction_length,
+                log_scale=True,
+            ),
+            VstackFeatures(
+                output_field=FieldName.FEAT_TIME,
+                input_fields=[FieldName.FEAT_TIME, FieldName.FEAT_AGE],
+            ),
+            RenameFields(
+                mapping={
+                    FieldName.FEAT_STATIC_CAT: "static_categorical_features",
+                    FieldName.FEAT_STATIC_REAL: "static_real_features",
+                    FieldName.FEAT_TIME: "time_features",
+                    FieldName.TARGET: "values",
+                    FieldName.OBSERVED_VALUES: "observed_mask",
+                }
+            ),
+        ]
     )
-    
-    plt.title(f'{target_column} Forecast')
-    plt.xlabel('Date')
-    plt.ylabel(target_column)
-    plt.legend()
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    plt.show()
 
-# Visualization for a few time series
-num_plots = 3
-for i in range(num_plots):
-    time_series = test_dataset[i]
-    
-    # Generate forecasts
-    forecasts = generate_forecast(model, time_series)
-    
-    # Plot forecast
-    plot_forecast(time_series, forecasts, target_column, freq, prediction_length)
+# Create test instance splitter
+def create_test_instance_splitter(config):
+    return InstanceSplitter(
+        target_field="values",
+        is_pad_field=FieldName.IS_PAD,
+        start_field=FieldName.START,
+        forecast_start_field=FieldName.FORECAST_START,
+        instance_sampler=TestSplitSampler(),
+        past_length=config.context_length + max(config.lags_sequence),
+        future_length=config.prediction_length,
+        time_series_fields=["time_features", "observed_mask"],
+    )
 
-# Calculate and print some forecast metrics
-from evaluate import load
+# Create test dataloader
+def create_test_dataloader(dataset, config, freq, batch_size=64):
+    transformation = create_test_transformation(freq, config)
+    transformed_data = transformation.apply(dataset, is_train=False)
+    
+    instance_splitter = create_test_instance_splitter(config)
+    testing_instances = instance_splitter.apply(transformed_data, is_train=False)
+    
+    from gluonts.dataset.loader import as_stacked_batches
+    return as_stacked_batches(
+        testing_instances,
+        batch_size=batch_size,
+        output_type=torch.tensor,
+        field_names=[
+            "past_time_features",
+            "past_values",
+            "past_observed_mask",
+            "future_time_features",
+            "static_categorical_features",
+            "static_real_features",
+        ],
+    )
 
+# Generate forecasts
+forecasts = []
+test_dataloader = create_test_dataloader(gluonts_test_dataset, config, freq)
+
+for batch in test_dataloader:
+    outputs = model.generate(
+        static_categorical_features=batch["static_categorical_features"].to(device),
+        static_real_features=batch["static_real_features"].to(device),
+        past_time_features=batch["past_time_features"].to(device),
+        past_values=batch["past_values"].to(device),
+        future_time_features=batch["future_time_features"].to(device),
+        past_observed_mask=batch["past_observed_mask"].to(device),
+    )
+    forecasts.append(outputs.sequences.cpu().numpy())
+
+forecasts = np.vstack(forecasts)
+print(f"Generated forecasts shape: {forecasts.shape}")
+
+# Calculate evaluation metrics
 mase_metric = load("evaluate-metric/mase")
 smape_metric = load("evaluate-metric/smape")
+
+forecast_median = np.median(forecasts, axis=1)
 
 mase_metrics = []
 smape_metrics = []
 
-for item_id, ts in enumerate(test_dataset[:50]):  # Limit to first 50 series for computation time
+for item_id, ts in enumerate(test_dataset):
     training_data = ts["target"][:-prediction_length]
     ground_truth = ts["target"][-prediction_length:]
     
-    # Generate forecast
-    forecasts = generate_forecast(model, ts)
-    forecast_median = np.median(forecasts, axis=0)
-    
-    # Compute metrics
     mase = mase_metric.compute(
-        predictions=forecast_median, 
+        predictions=forecast_median[item_id], 
         references=np.array(ground_truth), 
         training=np.array(training_data), 
-        periodicity=1  # For daily data
-    )
+        periodicity=get_seasonality(freq))
     mase_metrics.append(mase["mase"])
     
     smape = smape_metric.compute(
-        predictions=forecast_median, 
-        references=np.array(ground_truth)
+        predictions=forecast_median[item_id], 
+        references=np.array(ground_truth),
     )
     smape_metrics.append(smape["smape"])
 
-print(f"Average MASE: {np.mean(mase_metrics):.4f}")
-print(f"Average sMAPE: {np.mean(smape_metrics):.4f}")
+print(f"\nEvaluation Metrics:")
+print(f"MASE (mean): {np.mean(mase_metrics):.4f}")
+print(f"sMAPE (mean): {np.mean(smape_metrics):.4f}")
 
-# Scatter plot of metrics
-plt.figure(figsize=(10, 6))
-plt.scatter(mase_metrics, smape_metrics, alpha=0.5)
+# Plot metrics distribution
+plt.figure(figsize=(12, 5))
+plt.subplot(1, 2, 1)
+plt.hist(mase_metrics, bins=20, color='blue', alpha=0.7)
+plt.title("MASE Distribution")
 plt.xlabel("MASE")
-plt.ylabel("sMAPE")
-plt.title("Forecast Accuracy Metrics")
+plt.ylabel("Count")
+
+plt.subplot(1, 2, 2)
+plt.hist(smape_metrics, bins=20, color='green', alpha=0.7)
+plt.title("sMAPE Distribution")
+plt.xlabel("sMAPE")
+plt.ylabel("Count")
+
 plt.tight_layout()
 plt.show()
+
+# Plot some sample forecasts
+def plot_forecast(ts_index):
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    # Get the test example
+    ts = test_dataset[ts_index]
+    
+    # Create date range
+    dates = pd.date_range(
+        start=pd.Period(ts["start"], freq=freq).start_time,
+        periods=len(ts["target"]),
+        freq=freq,
+    )
+    
+    # Plot historical data
+    ax.plot(
+        dates[:-prediction_length], 
+        ts["target"][:-prediction_length], 
+        label="History",
+        color="blue"
+    )
+    
+    # Plot actual values in forecast period
+    ax.plot(
+        dates[-prediction_length:], 
+        ts["target"][-prediction_length:], 
+        label="Actual",
+        color="green",
+        linestyle="--"
+    )
+    
+    # Plot median forecast
+    ax.plot(
+        dates[-prediction_length:], 
+        forecast_median[ts_index], 
+        label="Median Forecast",
+        color="red"
+    )
+    
+    # Plot forecast uncertainty
+    ax.fill_between(
+        dates[-prediction_length:],
+        np.percentile(forecasts[ts_index], 25, axis=0),
+        np.percentile(forecasts[ts_index], 75, axis=0),
+        color="red",
+        alpha=0.2,
+        label="IQR"
+    )
+    
+    ax.set_title(f"Forecast for Station {ts['item_id']} - {target_column}")
+    ax.set_xlabel("Date")
+    ax.set_ylabel(target_column)
+    ax.legend()
+    plt.grid(True)
+    plt.show()
+
+# Plot first few time series
+for i in range(3):
+    plot_forecast(i)
