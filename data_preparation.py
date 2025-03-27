@@ -4,7 +4,6 @@ import numpy as np
 import glob
 import os
 from datasets import Dataset, Features, Value, Sequence, DatasetDict
-from gluonts.dataset.pandas import PandasDataset
 from gluonts.itertools import Map
 
 # When reading the CSV files, specify dtypes
@@ -108,11 +107,46 @@ def process_station_data(station_df):
     numeric_cols = ['PRCP', 'TMAX', 'TMIN', 'TAVG', 'TEMP_RANGE', 'SNWD']
     numeric_cols = [col for col in numeric_cols if col in resampled_df.columns]
     
-    # Interpolate for small gaps (up to 3 days)
-    resampled_df[numeric_cols] = resampled_df[numeric_cols].interpolate(method='linear', limit=3)
+    # Advanced interpolation strategy
+    for col in numeric_cols:
+        # 1. Seasonal interpolation for temperature-related columns
+        if col in ['TMAX', 'TMIN', 'TAVG', 'TEMP_RANGE']:
+            resampled_df[col] = resampled_df.groupby(resampled_df.index.month)[col].transform(
+                lambda x: x.interpolate(method='linear', limit=7)
+            )
+        
+        # 2. Log interpolation for precipitation (if always non-negative)
+        elif col == 'PRCP':
+            # Avoid log(0) by adding a small constant
+            log_interpolated = np.log1p(resampled_df[col]).interpolate(method='linear', limit=5)
+            resampled_df[col] = np.expm1(log_interpolated)
+        
+        # 3. Cubic spline interpolation for snow depth
+        elif col == 'SNWD':
+            # Cubic spline can better capture non-linear patterns
+            resampled_df[col] = resampled_df[col].interpolate(method='cubicspline', limit=10)
     
-    # Fill remaining gaps with forward then backward fill
-    resampled_df[numeric_cols] = resampled_df[numeric_cols].ffill().bfill()
+    # 4. Adaptive fallback interpolation strategies
+    for col in numeric_cols:
+        # Forward and backward fill
+        resampled_df[col] = resampled_df[col].fillna(method='ffill', limit=30)
+        resampled_df[col] = resampled_df[col].fillna(method='bfill', limit=30)
+        
+        # If still missing, use seasonal median
+        if resampled_df[col].isna().any():
+            resampled_df[col] = resampled_df.groupby(resampled_df.index.month)[col].transform(
+                lambda x: x.fillna(x.median())
+            )
+    
+    # 5. Hard threshold for extreme missing values
+    for col in numeric_cols:
+        # Remove rows with unrealistic or completely missing data
+        if col in ['TMAX', 'TMIN', 'TAVG']:
+            temp_mean = resampled_df[col].mean()
+            temp_std = resampled_df[col].std()
+            resampled_df.loc[np.abs(resampled_df[col] - temp_mean) > 3 * temp_std, col] = np.nan
+        elif col == 'PRCP':
+            resampled_df.loc[resampled_df[col] < 0, col] = 0  # No negative precipitation
     
     # Add back station metadata
     for key, value in station_meta.items():
