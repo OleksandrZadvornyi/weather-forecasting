@@ -360,3 +360,63 @@ print("Final dataset sizes:")
 print(f"Train: {len(train_dataset)} series")
 print(f"Validation: {len(val_dataset)} series")
 print(f"Test: {len(test_dataset)} series")
+
+
+
+
+
+import matplotlib.pyplot as plt
+
+def plot_sequential_time_series(train_example, validation_example, test_example, 
+                                 title=None, target_column="TMAX"):
+    """
+    Plot time series data sequentially from train, validation, and test sets.
+    
+    Parameters:
+    - train_example: First time series example from train dataset
+    - validation_example: First time series example from validation dataset
+    - test_example: First time series example from test dataset
+    - title: Optional title for the plot
+    - target_column: Name of the target column (default is "TMAX")
+    """
+    # Create a figure and axis
+    plt.figure(figsize=(15, 6))
+    
+    # Extract target values
+    train_target = train_example["target"]
+    validation_target = validation_example["target"]
+    test_target = test_example["target"]
+    
+    # Calculate the x-axis values for each array
+    train_x = np.arange(0, len(train_target))
+    validation_x = np.arange(len(train_target), len(train_target) + len(validation_target))
+    test_x = np.arange(len(train_target) + len(validation_target), 
+                       len(train_target) + len(validation_target) + len(test_target))
+    
+    # Plot each array with its corresponding x-axis values
+    plt.plot(train_x, train_target, color="blue", label="Train")
+    plt.plot(validation_x, validation_target, color="red", label="Validation")
+    plt.plot(test_x, test_target, color="green", label="Test")
+    
+    # Add labels and title
+    plt.xlabel("Time Index")
+    plt.ylabel(f"{target_column} Temperature")
+    plt.title(title or f"Sequential Time Series Plot of {target_column}")
+    plt.legend()
+    
+    # Add vertical lines to separate datasets
+    plt.axvline(x=len(train_target), color='gray', linestyle='--', alpha=0.7)
+    plt.axvline(x=len(train_target) + len(validation_target), color='gray', linestyle='--', alpha=0.7)
+    
+    # Show the plot
+    plt.tight_layout()
+    plt.show()
+    
+for x in range(max_files):     
+    # Usage in your existing code:
+    plot_sequential_time_series(
+        train_dataset[x], 
+        val_dataset[x], 
+        test_dataset[x], 
+        target_column=target_column
+    )
