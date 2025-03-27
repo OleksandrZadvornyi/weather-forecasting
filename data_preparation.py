@@ -198,6 +198,12 @@ ddf = ddf.map_partitions(preprocess, meta=meta_df)
 print("Converting to pandas dataframe...")
 df = ddf.compute()
 
+# Drop rows with NaN values
+print("Dropping rows with NaN values...")
+print(f"Total rows: {len(df)}")
+df = df.dropna(subset=['TMAX'])
+print(f"Rows remaining after dropping NaNs: {len(df)}")
+
 # 6. Create a time-indexed dataset
 # Group by station and apply resampling
 print("Resampling data by station...")
@@ -421,7 +427,7 @@ def plot_sequential_time_series(train_example, validation_example, test_example,
     # Add labels and title
     plt.xlabel("Time Index")
     plt.ylabel(f"{target_column} Temperature")
-    plt.title(title or f"Sequential Time Series Plot of {target_column}")
+    plt.title(title or f"Sequential Time Series Plot of {target_column} ({train_example['item_id']})")
     plt.legend()
     
     # Add vertical lines to separate datasets
