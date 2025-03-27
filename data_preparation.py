@@ -140,8 +140,8 @@ def process_station_data(station_df):
         
         # Step 3: Final fallback strategies
         # Forward and backward fill with extended limits
-        resampled_df[col] = resampled_df[col].fillna(method='ffill', limit=60)
-        resampled_df[col] = resampled_df[col].fillna(method='bfill', limit=60)
+        resampled_df[col] = resampled_df[col].ffill(limit=60)
+        resampled_df[col] = resampled_df[col].bfill(limit=60)
         
         # Step 4: Last resort - replace remaining NaNs with global median
         global_median = station_df[col].median()
@@ -180,7 +180,7 @@ def process_station_data(station_df):
     # Final NaN check and global median replacement
     for col in numeric_cols:
         if resampled_df[col].isna().any():
-            print(f"Warning: Remaining NaNs in {col} column")
+            # print(f"Warning: Remaining NaNs in {col} column")
             global_median = station_df[col].median()
             resampled_df[col] = resampled_df[col].fillna(global_median)
     
