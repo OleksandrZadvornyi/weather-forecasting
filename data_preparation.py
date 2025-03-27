@@ -107,46 +107,59 @@ def process_station_data(station_df):
     numeric_cols = ['PRCP', 'TMAX', 'TMIN', 'TAVG', 'TEMP_RANGE', 'SNWD']
     numeric_cols = [col for col in numeric_cols if col in resampled_df.columns]
     
-    # Advanced interpolation strategy
+    # Enhanced interpolation strategy
     for col in numeric_cols:
-        # 1. Seasonal interpolation for temperature-related columns
-        if col in ['TMAX', 'TMIN', 'TAVG', 'TEMP_RANGE']:
-            resampled_df[col] = resampled_df.groupby(resampled_df.index.month)[col].transform(
-                lambda x: x.interpolate(method='linear', limit=7)
-            )
+        # Step 1: Seasonal interpolation with machine learning fallback
+        def seasonal_interpolation(x):
+            # First try linear interpolation within season
+            interpolated = x.interpolate(method='linear', limit=7)
+            
+            # If still NaNs, use seasonal median
+            if interpolated.isna().any():
+                interpolated = interpolated.fillna(x.median())
+            
+            return interpolated
         
-        # 2. Log interpolation for precipitation (if always non-negative)
-        elif col == 'PRCP':
-            # Avoid log(0) by adding a small constant
-            log_interpolated = np.log1p(resampled_df[col]).interpolate(method='linear', limit=5)
-            resampled_df[col] = np.expm1(log_interpolated)
+        resampled_df[col] = resampled_df.groupby(resampled_df.index.month)[col].transform(seasonal_interpolation)
         
-        # 3. Cubic spline interpolation for snow depth
-        elif col == 'SNWD':
-            # Cubic spline can better capture non-linear patterns
-            resampled_df[col] = resampled_df[col].interpolate(method='cubicspline', limit=10)
-    
-    # 4. Adaptive fallback interpolation strategies
-    for col in numeric_cols:
-        # Forward and backward fill
-        resampled_df[col] = resampled_df[col].fillna(method='ffill', limit=30)
-        resampled_df[col] = resampled_df[col].fillna(method='bfill', limit=30)
-        
-        # If still missing, use seasonal median
-        if resampled_df[col].isna().any():
-            resampled_df[col] = resampled_df.groupby(resampled_df.index.month)[col].transform(
-                lambda x: x.fillna(x.median())
-            )
-    
-    # 5. Hard threshold for extreme missing values
-    for col in numeric_cols:
-        # Remove rows with unrealistic or completely missing data
+        # Step 2: Advanced interpolation techniques
         if col in ['TMAX', 'TMIN', 'TAVG']:
+            # Use rolling median for temperature
+            window_size = 15  # Adjust based on your data
+            rolling_median = resampled_df[col].rolling(window=window_size, center=True, min_periods=1).median()
+            resampled_df[col] = resampled_df[col].fillna(rolling_median)
+        
+        elif col == 'PRCP':
+            # Log interpolation with non-zero floor
+            log_interpolated = np.log1p(resampled_df[col] + 0.01).interpolate(method='cubic', limit=10)
+            resampled_df[col] = np.maximum(np.expm1(log_interpolated), 0)
+        
+        elif col == 'SNWD':
+            # More robust interpolation for snow depth
+            resampled_df[col] = resampled_df[col].interpolate(method='spline', order=3, limit=10)
+        
+        # Step 3: Final fallback strategies
+        # Forward and backward fill with extended limits
+        resampled_df[col] = resampled_df[col].fillna(method='ffill', limit=60)
+        resampled_df[col] = resampled_df[col].fillna(method='bfill', limit=60)
+        
+        # Step 4: Last resort - replace remaining NaNs with global median
+        global_median = station_df[col].median()
+        resampled_df[col] = resampled_df[col].fillna(global_median)
+    
+    # Outlier and extreme value handling
+    for col in numeric_cols:
+        if col in ['TMAX', 'TMIN', 'TAVG']:
+            # Remove extreme temperature outliers
             temp_mean = resampled_df[col].mean()
             temp_std = resampled_df[col].std()
-            resampled_df.loc[np.abs(resampled_df[col] - temp_mean) > 3 * temp_std, col] = np.nan
+            lower_bound = temp_mean - 3 * temp_std
+            upper_bound = temp_mean + 3 * temp_std
+            resampled_df.loc[(resampled_df[col] < lower_bound) | (resampled_df[col] > upper_bound), col] = global_median
+        
         elif col == 'PRCP':
-            resampled_df.loc[resampled_df[col] < 0, col] = 0  # No negative precipitation
+            # Ensure non-negative precipitation
+            resampled_df.loc[resampled_df[col] < 0, col] = 0
     
     # Add back station metadata
     for key, value in station_meta.items():
@@ -163,6 +176,13 @@ def process_station_data(station_df):
     # Recalculate TEMP_RANGE for ALL rows
     if 'TMAX' in resampled_df.columns and 'TMIN' in resampled_df.columns:
         resampled_df['TEMP_RANGE'] = resampled_df['TMAX'] - resampled_df['TMIN']
+    
+    # Final NaN check and global median replacement
+    for col in numeric_cols:
+        if resampled_df[col].isna().any():
+            print(f"Warning: Remaining NaNs in {col} column")
+            global_median = station_df[col].median()
+            resampled_df[col] = resampled_df[col].fillna(global_median)
     
     return resampled_df
 
