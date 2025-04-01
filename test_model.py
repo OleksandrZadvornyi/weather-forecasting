@@ -222,8 +222,8 @@ plt.tight_layout()
 plt.show()
 
 # Plot some sample forecasts
-def plot_forecast(ts_index):
-    fig, ax = plt.subplots(figsize=(12, 6))
+def plot_forecast(ts_index, prediction_length=30):
+    fig, ax = plt.subplots(figsize=(15, 7))
     
     # Get the test example
     ts = test_dataset[ts_index]
@@ -239,17 +239,19 @@ def plot_forecast(ts_index):
     ax.plot(
         dates[:-prediction_length], 
         ts["target"][:-prediction_length], 
-        label="History",
-        color="blue"
+        label="Historical Data",
+        color="blue",
+        linewidth=2
     )
     
     # Plot actual values in forecast period
     ax.plot(
         dates[-prediction_length:], 
         ts["target"][-prediction_length:], 
-        label="Actual",
+        label="Actual Future Values",
         color="green",
-        linestyle="--"
+        linestyle="--",
+        linewidth=2
     )
     
     # Plot median forecast
@@ -257,26 +259,28 @@ def plot_forecast(ts_index):
         dates[-prediction_length:], 
         forecast_median[ts_index], 
         label="Median Forecast",
-        color="red"
+        color="red",
+        linewidth=2
     )
     
-    # Plot forecast uncertainty
+    # Plot forecast uncertainty with wider confidence interval
     ax.fill_between(
         dates[-prediction_length:],
-        np.percentile(forecasts[ts_index], 25, axis=0),
-        np.percentile(forecasts[ts_index], 75, axis=0),
+        np.percentile(forecasts[ts_index], 10, axis=0),
+        np.percentile(forecasts[ts_index], 90, axis=0),
         color="red",
         alpha=0.2,
-        label="IQR"
+        label="80% Confidence Interval"
     )
     
-    ax.set_title(f"Forecast for Station {ts['item_id']} - {target_column}")
-    ax.set_xlabel("Date")
-    ax.set_ylabel(target_column)
-    ax.legend()
-    plt.grid(True)
+    ax.set_title(f"Forecast for Station {ts['item_id']} - {target_column}", fontsize=15)
+    ax.set_xlabel("Date", fontsize=12)
+    ax.set_ylabel(f"{target_column} (°C)", fontsize=12)
+    ax.legend(fontsize=10)
+    plt.grid(True, linestyle='--', alpha=0.7)
+    plt.tight_layout()
     plt.show()
 
-# Plot first few time series
+# Plot with longer prediction length
 for i in range(3):
-    plot_forecast(i)
+    plot_forecast(i, prediction_length=90)  # Try 30 or 90 days
