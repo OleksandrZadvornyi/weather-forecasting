@@ -2,6 +2,11 @@
 
 This repository contains a deep learning pipeline for forecasting daily maximum temperatures (`TMAX`) using the **Time Series Transformer** architecture. The project utilizes HuggingFace `transformers`, `gluonts` and `accelerator` to preprocess historical weather data, train a model and visualize 30-day forecasts.
 
+## 📡 Data Source
+
+The weather data used in this project is sourced from the **Global Historical Climatology Network daily (GHCNd)**:
+* **Source URL**: [NOAA NCEI Data Access](https://www.ncei.noaa.gov/data/global-historical-climatology-network-daily)
+
 ## 📂 Repository Structure
 
 * **`daily-summaries-latest-upm/`**: Directory containing raw CSV data files (Daily Summaries) for Ukrainian weather stations.
